@@ -4,7 +4,8 @@ const bodyParser = require('body-parser');
 const sqlite = require('sqlite3').verbose();
 const cors = require('cors');
 const bcrypt  = require('bcrypt');
-
+const SECRET_KEY = process.env.SECRET_KEY || 'your_secret_key';
+const jwt = require('jsonwebtoken');
 // initialising the modules and ports 
 const app = express();
 const port = 4000;
@@ -14,6 +15,19 @@ app.use(cors());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
+// token authentication middleware 
+const authenticateToken = (req, res, next) => {
+    const token = req.headers['authorization']?.split(' ')[1];
+    console.log(`the token is : ${token}`);
+    if (token == null) return res.sendStatus(777); // If no token, return 777 Unauthorized
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.sendStatus(403); // If token is invalid, return 403 Forbidden
+
+        req.user = user; // Save user data in the request object
+        next(); // Proceed to the next middleware or route handler
+    });
+};
 // setting up the sqlite database for our server 
 const database = new sqlite.Database('./tasks.db',(err)=>{
     if(err){
@@ -24,11 +38,10 @@ const database = new sqlite.Database('./tasks.db',(err)=>{
         // creating the table in databse after sucessfull database creation 
         let query = `CREATE TABLE IF NOT EXISTS tasks (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
+                        username TEXT,
                         title TEXT,
                         description TEXT,
-                        status TEXT DEFAULT 'pending',
-                        FOREIGN KEY (user_id) REFERENCES users(id)
+                        status TEXT DEFAULT 'pending'
                         );
                          `;
         database.run(query);
@@ -48,17 +61,19 @@ const database = new sqlite.Database('./tasks.db',(err)=>{
 });
 
 // insertion logic for data entry 
-app.post('/api/add', (req, res) => {
+app.post('/api/add',authenticateToken, (req, res) => {
+    // getting username from token using authenticateToken funtion
+    const username = req.user.user;
     console.log('api acll is sucesss')
     const { tittle, description } = req.body;
     console.log(tittle);
     // creating insert logic query 
-    const query = `INSERT INTO tasks(title,description) VALUES(?,?)`;
+    const query = `INSERT INTO tasks(username,title,description) VALUES(?,?,?)`;
     // filtering the tittle and description value 
     if (!tittle || !description) {
         return res.status(400).json({ error: 'Title and description are required' });
      }
-    database.run(query,[tittle,description],function (err){
+    database.run(query,[username,tittle,description],function (err){
         // checking if the data is inerted or not ? 
         if(err){
             return res.status(500).json({ error: 'Failed to add task' });
@@ -71,15 +86,18 @@ app.post('/api/add', (req, res) => {
 });
 
 // server logic for getting data from database 
-app.get('/api/getdata',(req,res)=>{
+app.get('/api/getdata',authenticateToken,(req,res)=>{
+    const username = req.user.user;
+    console.log(`user name :${username}`);
     console.log('api acll is sucesss')
-    const query = 'SELECT * FROM tasks';
-    database.all(query,(err,rows)=>{
-        if(err){
-            return res.status(500).json({error:'Error while retriving the data '});
-        }
-        res.json(rows);
-    })
+    const query = `SELECT * FROM tasks WHERE username = ?`;
+database.all(query, [username], (err, rows) => {
+    if (err) {
+        return res.status(500).json({ error: 'Error while retrieving the data' });
+    }
+    res.json(rows);
+});
+
 });
 
 // server logic for update database 
@@ -116,7 +134,11 @@ app.post('/api/signin',async (req,res)=>{
             console.error(err);
             return res.status(500).json({error:'error while inserting data into the table'});
         }
-            res.status(500).json({sucess:'Data Inserted Sucessfully'});
+        // creating token 
+        const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: '1d' }); // Token expires in 1 day
+            console.log({sucess:'Data Inserted Sucessfully'});
+            console.log(`the token is : ${token}`);
+            res.json({token});
         
     });
 });
@@ -151,7 +173,9 @@ app.post('/api/login',async (req,res)=>{
             console.log(result)
             if(result){
                 console.log('Password Match Sucess');
-                return res.json({ success: 'Login successful' });
+                const token = jwt.sign({ user }, SECRET_KEY, { expiresIn: '1d' }); // Token expires in 1 day
+                console.log(`the token is : ${token}`);
+                return res.json({token});
             }
 
             else{
